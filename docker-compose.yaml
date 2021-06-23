@@ -1,20 +1,56 @@
 version: "3"
 
 services:
-  
-  mysql:
-    image: wesleywillians/mysql-kafka-connect:latest
-    command: --innodb-use-native-aio=0
-    tty: true
-    restart: always
-    ports:
-      - "33600:3306"
+  postgres:
+    image: debezium/postgres:12
+    container_name: postgres
     environment:
-      - MYSQL_DATABASE=products
-      - MYSQL_ROOT_PASSWORD=root
-      - MYSQL_USER=root
+      - POSTGRES_USER=root
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_DB=enterprise
+    volumes:
+      - $PWD/seed/customers-pg.sql:/docker-entrypoint-initdb.d/z99_dump.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2017-latest
+    container_name: sqlserver
+    # command: /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Password!' -i /opt/scripts/database.sql
+    # entrypoint: bash -c "sleep 30 && /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Password!' -i /opt/scripts/database.sql"
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_PID=Standard
+      - SA_PASSWORD=Password!
+      - MSSQL_AGENT_ENABLED=true
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-Usa", "-PPassword!", "-Q", "select 1"]
+      interval: 1s
+      retries: 20
+    # volumes:
+    #   - $PWD/seed/customers-sqlserver.sql:/opt/scripts/database.sql
+    ports:
+      - "1433:1433"
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  sqlserver-migration:
+    container_name: sqlserver-migration
+    image: mcr.microsoft.com/mssql/server:2017-latest
+    entrypoint: bash -c "sleep 15 && /opt/mssql-tools/bin/sqlcmd -S sqlserver -U SA -P 'Password!' -i /opt/scripts/database.sql"
+    links: 
+      - sqlserver
+    depends_on:
+      - sqlserver
+    volumes:
+      - $PWD/seed/customers-sqlserver.sql:/opt/scripts/database.sql
 
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
@@ -89,15 +125,17 @@ services:
     # when running this offline, spin up the stack once and then run :
     #   docker cp kafka-connect:/usr/share/confluent-hub-components ./data/connect-jars
     volumes:
-      - $PWD/data:/data
+      - $PWD/data/kafka-connect:/data
     # In the command section, $ are replaced with $$ to avoid the error 'Invalid interpolation format for "command" option'
     command:
       - bash
       - -c
       - |
         echo "Installing Connector"
-        confluent-hub install --no-prompt debezium/debezium-connector-mysql:1.2.2
-        confluent-hub install --no-prompt confluentinc/kafka-connect-elasticsearch:10.0.1
+        confluent-hub install --no-prompt debezium/debezium-connector-mysql:1.5.0
+        confluent-hub install --no-prompt debezium/debezium-connector-postgresql:1.5.0
+        confluent-hub install --no-prompt debezium/debezium-connector-sqlserver:1.5.0
+        confluent-hub install --no-prompt confluentinc/kafka-connect-elasticsearch:11.0.6
         #
         echo "Launching Kafka Connect worker"
         /etc/confluent/docker/run &
@@ -106,33 +144,40 @@ services:
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
 
-  es01:
+  elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:7.11.2
-    container_name: es01
+    container_name: elasticsearch
     environment:
-      - node.name=es01
+      - node.name=elasticsearch
       - cluster.name=es-docker-cluster
-      - cluster.initial_master_nodes=es01
+      - cluster.initial_master_nodes=elasticsearch
       - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
     ulimits:
       memlock:
         soft: -1
         hard: -1
     volumes:
-      - ./es01:/usr/share/elasticsearch/data
+      - $PWD/data/elasticsearch:/usr/share/elasticsearch/data
     ports:
       - 9200:9200
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
 
-  kib01:
+  kibana:
     image: docker.elastic.co/kibana/kibana:7.11.2
-    container_name: kib01
+    container_name: kibana
+    depends_on: 
+      - elasticsearch
     ports:
       - 5601:5601
     environment:
-      ELASTICSEARCH_URL: http://es01:9200
-      ELASTICSEARCH_HOSTS: '["http://es01:9200"]'
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
