@@ -23,8 +23,6 @@ services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2017-latest
     container_name: sqlserver
-    # command: /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Password!' -i /opt/scripts/database.sql
-    # entrypoint: bash -c "sleep 30 && /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P 'Password!' -i /opt/scripts/database.sql"
     environment:
       - ACCEPT_EULA=Y
       - MSSQL_PID=Standard
@@ -32,10 +30,9 @@ services:
       - MSSQL_AGENT_ENABLED=true
     healthcheck:
       test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-Usa", "-PPassword!", "-Q", "select 1"]
-      interval: 1s
-      retries: 20
-    # volumes:
-    #   - $PWD/seed/customers-sqlserver.sql:/opt/scripts/database.sql
+      interval: 10s
+      timeout: 5s
+      retries: 5
     ports:
       - "1433:1433"
     extra_hosts:
@@ -44,13 +41,16 @@ services:
   sqlserver-migration:
     container_name: sqlserver-migration
     image: mcr.microsoft.com/mssql/server:2017-latest
-    entrypoint: bash -c "sleep 15 && /opt/mssql-tools/bin/sqlcmd -S sqlserver -U SA -P 'Password!' -i /opt/scripts/database.sql"
+    command: bash -c "/opt/scripts/wait-for-sqlserver.sh sqlserver /opt/mssql-tools/bin/sqlcmd -S sqlserver -U SA -P 'Password!' -i /opt/seed/customers-sqlserver.sql"
+    environment:
+      - SA_PASSWORD=Password!
     links: 
       - sqlserver
     depends_on:
       - sqlserver
     volumes:
-      - $PWD/seed/customers-sqlserver.sql:/opt/scripts/database.sql
+      - $PWD/seed/:/opt/seed/
+      - $PWD/scripts/:/opt/scripts/
 
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
